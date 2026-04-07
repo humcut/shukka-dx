@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8">
+  <!-- スマホでのピンチズーム・ダブルタップ拡大などを完全防止する viewport -->
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>道の駅 出荷DX</title>
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Vue 3 (CDN) -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <!-- jsQR (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <!-- Chart.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    /* Vue 読み込み前のちらつき防止 */
+    [v-cloak] {
+      display: none !important;
+    }
+
+    /* スマホ画面のリフレッシュ引っ張り防止 */
+    body {
+      overscroll-behavior-y: none;
+    }
+
+    /* フラッシュアニメーション：成功（緑）/ 重複（黄） */
+    @keyframes flash-success {
+      0% {
+        background-color: rgba(34, 197, 94, 0.9);
+      }
+
+      100% {
+        background-color: transparent;
+      }
+    }
+
+    @keyframes flash-warning {
+      0% {
+        background-color: rgba(234, 179, 8, 0.9);
+      }
+
+      100% {
+        background-color: transparent;
+      }
+    }
+
+    .flash-green {
+      animation: flash-success 0.4s ease-out;
+    }
+
+    .flash-yellow {
+      animation: flash-warning 0.5s ease-out;
+    }
+
+    .flash-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      pointer-events: none;
+    }
+
+    /* バッジ用ポップイン */
+    @keyframes popIn {
+      0% {
+        transform: scale(0.3);
+        opacity: 0;
+      }
+
+      70% {
+        transform: scale(1.15);
+        opacity: 1;
+      }
+
+      100% {
+        transform: scale(1);
+        opacity: 1;
+      }
+    }
+
+    .animate-popIn {
+      animation: popIn 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+    }
+
+    /* ローディングオーバーレイのアニメーション */
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .animate-spin {
+      animation: spin 1s linear infinite;
+    }
+  </style>
+</head>
+
+<body class="bg-white text-black font-sans select-none overscroll-none h-screen flex flex-col">
+
+  <!-- Vue App Container -->
+  <div id="app" class="flex-1 flex flex-col h-full overflow-hidden" v-cloak>
+
+    <!-- 全面ローディング表示（送信中） -->
+    <div v-show="isSubmitting" class="absolute inset-0 bg-white/90 z-[999] flex flex-col items-center justify-center">
+      <div class="w-16 h-16 border-8 border-gray-200 border-t-[#1E3A8A] rounded-full animate-spin mb-4"></div>
+      <div class="text-[#1E3A8A] text-2xl font-black tracking-widest">送信中...</div>
+    </div>
+
+    <!-- HEADER -->
+    <header
+      class="bg-[#000000] text-white p-4 flex justify-between items-center z-10 shrink-0 border-b-4 border-[#1E3A8A]">
+      <h1 class="text-xl font-bold tracking-wider">出荷DX</h1>
+      <div class="flex space-x-3">
+        <button @click="changeMode('input')" class="px-5 py-2 rounded-lg font-black transition-colors"
+          :class="mode === 'input' ? 'bg-[#1E3A8A] text-white' : 'bg-gray-800 text-gray-300'">入力</button>
+        <button @click="changeMode('dashboard')" class="px-5 py-2 rounded-lg font-black transition-colors"
+          :class="mode === 'dashboard' ? 'bg-[#1E3A8A] text-white' : 'bg-gray-800 text-gray-300'">集計</button>
+      </div>
+    </header>
+
+    <!-- NOTIFICATION ON TOP -->
+    <div v-if="lastEntryStr"
+      class="bg-[#1E3A8A] text-white font-bold p-3 text-center shrink-0 flex items-center justify-center gap-2 text-sm overflow-x-auto whitespace-nowrap shadow-md">
+      <span>✅</span> 前回送信: {{ lastEntryStr }} （{{ lastEntryStoresCount }}店舗）
+    </div>
+
+    <!-- MAIN CONTENT AREA -->
+    <main class="flex-1 overflow-y-auto overflow-x-hidden relative">
+
+      <!-- INPUT MODE -->
+      <div v-show="mode === 'input'" class="p-4 flex flex-col max-w-lg mx-auto h-full">
+
+        <!-- Price Inputs -->
+        <div class="mb-4 mt-2">
+          <h2 class="text-xl font-black mb-4 text-[#000000] text-center border-b-2 border-gray-200 pb-2">1. 価格をタップして選択
+          </h2>
+
+          <div class="grid grid-cols-3 gap-4">
+            <button v-for="p in presetPrices" :key="p" @click="selectPrice(p)"
+              class="py-6 rounded-xl transition-all shadow-md flex flex-col items-center justify-center relative border-[4px]"
+              :class="[
+                cart[p] ? 'bg-[#1E3A8A] text-white border-[#000000]' : 'bg-white text-[#000000] border-gray-300',
+                activePrice === p ? 'border-[6px] border-[#000000] shadow-xl ring-4 ring-[#1E3A8A] z-10 scale-105' : ''
+              ]">
+              <div class="text-3xl font-black">{{ p }}<span class="text-xs font-bold ml-0.5">円</span></div>
+              <!-- 選択個数表示 -->
+              <div v-if="cart[p]"
+                class="bg-white text-[#1E3A8A] text-base font-black px-3 py-1 rounded-full absolute -bottom-3 -right-3 border-[3px] border-[#000000] shadow-lg">
+                x {{ cart[p] }}
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Quantity Input -->
+        <div class="mb-2 flex-1 flex flex-col justify-center pb-4">
+          <h2 class="text-xl font-black mb-3 text-[#000000] text-center border-b-2 border-gray-200 pb-2"
+            v-if="activePrice">2. 「{{ activePrice }}円」の個数を増減</h2>
+          <h2 class="text-xl font-black mb-3 text-gray-400 text-center border-b-2 border-gray-200 pb-2" v-else>2.
+            個数を増減（上の価格を選択）</h2>
+
+          <div v-if="activePrice" class="flex items-center justify-center space-x-8 py-6 px-4">
+            <button @click="decrement"
+              class="w-20 h-20 rounded-full bg-[#000000] text-white text-5xl font-black shadow-lg transform active:scale-90 transition-transform flex justify-center items-center">-</button>
+            <div class="flex flex-col items-center w-28">
+              <div class="text-7xl font-black text-[#1E3A8A]">{{ activeQuantity }}</div>
+            </div>
+            <button @click="increment"
+              class="w-20 h-20 rounded-full bg-[#1E3A8A] text-white text-5xl font-black shadow-lg transform active:scale-90 transition-transform flex justify-center items-center">+</button>
+          </div>
+          <div v-else class="flex items-center justify-center py-6 px-4 opacity-50">
+            <div
+              class="w-20 h-20 rounded-full bg-gray-300 text-white text-5xl font-black flex justify-center items-center">
+              -</div>
+            <div class="w-28 text-center">
+              <div class="text-7xl font-black text-gray-300">0</div>
+            </div>
+            <div
+              class="w-20 h-20 rounded-full bg-gray-300 text-white text-5xl font-black flex justify-center items-center">
+              +</div>
+          </div>
+        </div>
+
+        <!-- Scan Button & Total -->
+        <div class="shrink-0 pt-2 pb-2">
+          <!-- 合計表示 -->
+          <div
+            class="text-center font-black text-2xl text-[#000000] mb-2 border-[4px] border-[#1E3A8A] py-3 rounded-xl bg-white shadow-md">
+            合計： <span class="text-4xl text-[#1E3A8A] px-2">{{ totalQuantity }}</span> 個
+          </div>
+
+          <button @click="startScanMode" :disabled="!isInputValid"
+            class="w-full py-6 rounded-2xl text-3xl font-black text-white shadow-xl transition-all transform active:scale-95"
+            :class="isInputValid ? 'bg-[#000000] active:bg-gray-800' : 'bg-gray-400 opacity-50 cursor-not-allowed'">
+            連続スキャン起動 📷
+          </button>
+        </div>
+      </div>
+
+      <!-- SCAN MODE -->
+      <div v-show="mode === 'scan'" class="absolute inset-0 bg-[#000000] flex flex-col pt-0 z-20">
+        <!-- Visual Feedback Overlay -->
+        <div class="flash-overlay pointer-events-none z-50 transition-colors duration-100" :class="flashClass"></div>
+
+        <!-- Video Area -->
+        <div class="relative flex-1 bg-gray-900 flex items-center justify-center overflow-hidden min-h-[50%]">
+          <video ref="video" autoplay playsinline muted class="w-full h-full object-cover"></video>
+          <canvas ref="canvas" class="hidden"></canvas>
+          <!-- Scan guide -->
+          <div class="absolute inset-0 pointer-events-none flex items-center justify-center">
+            <div
+              class="w-64 h-64 border-8 border-white opacity-50 rounded-[40px] shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
+            </div>
+          </div>
+
+          <div class="absolute top-4 right-4 z-20">
+            <div
+              class="bg-[#000000] text-white border-[3px] border-[#1E3A8A] px-5 py-2 rounded-full text-lg font-black flex items-center shadow-lg">
+              スキャン: <span class="text-[#1E3A8A] bg-white px-2 rounded-lg ml-2 text-2xl">{{ scannedStores.length
+                }}</span> 件
+            </div>
+          </div>
+        </div>
+
+        <!-- Scanned List -->
+        <div
+          class="h-[45%] bg-white p-4 flex flex-col shrink-0 rounded-t-3xl z-30 shadow-[0_-10px_30px_rgba(0,0,0,0.8)]">
+          <div class="flex flex-col gap-2 mb-2">
+            <div
+              class="text-xs font-black bg-gray-200 text-[#000000] px-3 py-2 rounded-lg whitespace-nowrap overflow-x-auto flex gap-2 border-[2px] border-gray-300">
+              <span>出荷予定:</span>
+              <span v-for="(qty, p) in cart" :key="p" class="bg-[#1E3A8A] text-white px-2 py-0.5 rounded-md">{{ p }}円 x
+                {{ qty }}</span>
+            </div>
+          </div>
+
+          <div
+            class="flex-1 overflow-y-auto bg-white border-[4px] border-[#000000] rounded-xl p-3 flex flex-wrap gap-2 content-start shadow-inner">
+            <span v-for="(store, index) in scannedStores" :key="index"
+              class="bg-[#1E3A8A] text-white px-4 py-2 rounded-xl font-black text-sm shadow animate-popIn border-2 border-[#000000]">
+              {{ store }}
+            </span>
+            <div v-if="scannedStores.length === 0" class="text-gray-500 text-xl font-black w-full text-center mt-8">
+              QRを真ん中に合わせてください
+            </div>
+          </div>
+
+          <!-- Done Button -->
+          <button @click="submitData" :disabled="scannedStores.length === 0 || isSubmitting"
+            class="w-full mt-4 py-6 rounded-2xl text-2xl font-black text-white flex justify-center items-center gap-2 transition-transform transform active:scale-95 border-4 border-[#000000] shadow-lg"
+            :class="scannedStores.length > 0 ? 'bg-[#1E3A8A] active:bg-[#152e6f]' : 'bg-gray-400 opacity-50'">
+            送信して入力に戻る！ 🚀
+          </button>
+        </div>
+      </div>
+
+      <!-- DASHBOARD MODE -->
+      <div v-show="mode === 'dashboard'" class="p-4 flex flex-col max-w-lg mx-auto h-full">
+        <div class="bg-[#000000] text-white rounded-2xl p-6 text-center shadow-lg mb-6 border-[6px] border-[#1E3A8A]">
+          <h2 class="text-sm font-bold text-gray-300 mb-2">今日一日の出荷総合計個数</h2>
+          <div class="text-8xl font-black text-[#ffffff]">{{ dashboardTodayTotal }}</div>
+        </div>
+
+        <div class="flex-1 bg-white p-5 rounded-2xl border-[6px] border-[#000000] shadow-sm flex flex-col">
+          <h2 class="text-xl font-black text-[#000000] mb-4 border-b-4 border-[#1E3A8A] pb-2">今月の推移（日別個数）</h2>
+          <div class="flex-1 relative w-full min-h-[250px]">
+            <!-- グラフ描画エリア -->
+            <canvas ref="chartCanvas"></canvas>
+          </div>
+          <button @click="fetchDashboard"
+            class="mt-6 w-full py-4 bg-[#1E3A8A] text-white font-black text-2xl rounded-xl shadow-lg transform active:scale-95 border-4 border-[#000000]">
+            データ最新化 🔄
+          </button>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script>
+    // ！！！！重要！！！！
+    // デプロイしたGASの「ウェブアプリのURL」をここに貼り付けてください
+    const GAS_API_URL = "hhttps://script.google.com/macros/s/AKfycbxWhQCo1_LYNt1zbO8s2uvo6czVzFr-YN7hehYVtwjdbsFcoqALViYQWrdEpMRpATLO/exec";
+
+    const { createApp, ref, computed } = Vue;
+
+    createApp({
+      setup() {
+        const mode = ref('input');
+
+        // カート状態
+        const presetPrices = [100, 150, 200, 250, 300, 500];
+        const cart = ref({});
+        const activePrice = ref(null);
+
+        // スキャン状態
+        const video = ref(null);
+        const canvas = ref(null);
+        const scannedStores = ref([]);
+        const flashClass = ref('');
+
+        // バックエンド通信状態
+        const isSubmitting = ref(false);
+
+        // 履歴・ダッシュボード
+        const lastEntryStr = ref('');
+        const lastEntryStoresCount = ref(0);
+        const dashboardTodayTotal = ref(0);
+        const chartInstance = ref(null);
+        const chartCanvas = ref(null);
+
+        // --- 算出プロパティ ---
+        const totalQuantity = computed(() => {
+          let sum = 0;
+          for (const key in cart.value) {
+            sum += cart.value[key];
+          }
+          return sum;
+        });
+
+        const isInputValid = computed(() => { return totalQuantity.value > 0; });
+
+        const activeQuantity = computed(() => {
+          if (!activePrice.value) return 0;
+          return cart.value[activePrice.value] || 0;
+        });
+
+        // --- カメラ系統 ---
+        let stream = null;
+        let keepScanning = false;
+
+        const changeMode = (newMode) => {
+          if (mode.value === 'scan' && newMode !== 'scan') {
+            stopCamera();
+          }
+          mode.value = newMode;
+          if (newMode === 'dashboard') {
+            fetchDashboard();
+          }
+        };
+
+        const selectPrice = (p) => {
+          if (!p) return;
+          activePrice.value = p;
+          if (!cart.value[p]) {
+            cart.value[p] = 1;
+          }
+        };
+
+        const increment = () => {
+          if (!activePrice.value) return;
+          if (!cart.value[activePrice.value]) cart.value[activePrice.value] = 0;
+          cart.value[activePrice.value]++;
+        };
+
+        const decrement = () => {
+          if (!activePrice.value) return;
+          if (cart.value[activePrice.value] && cart.value[activePrice.value] > 0) {
+            cart.value[activePrice.value]--;
+            if (cart.value[activePrice.value] === 0) {
+              delete cart.value[activePrice.value];
+            }
+          }
+        };
+
+        const startScanMode = async () => {
+          scannedStores.value = [];
+          mode.value = 'scan';
+          await startCamera();
+        };
+
+        const triggerFlash = (type) => {
+          flashClass.value = '';
+          setTimeout(() => { flashClass.value = type === 'success' ? 'flash-green' : 'flash-yellow'; }, 10);
+        };
+
+        const startCamera = async () => {
+          stopCamera(); // 既存ストリームをクリーンアップ
+
+          try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" } }, audio: false }); }
+          catch (err1) {
+            try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false }); }
+            catch (err2) {
+              try { stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
+              catch (err3) {
+                alert(`【カメラからの映像を取得できません】\n\nブラウザのアドレスバー左側「鍵/Aaマーク」から設定を開き、カメラの使用を「許可」してください。`);
+                changeMode('input');
+                return;
+              }
+            }
+          }
+
+          if (video.value) {
+            video.value.srcObject = stream;
+            video.value.play();
+            keepScanning = true;
+            requestAnimationFrame(tick);
+          }
+        };
+
+        const stopCamera = () => {
+          keepScanning = false;
+          if (stream) {
+            stream.getTracks().forEach(t => t.stop());
+            stream = null;
+          }
+          if (video.value) {
+            video.value.pause();
+            video.value.srcObject = null;
+          }
+        };
+
+        const tick = () => {
+          if (!keepScanning) return;
+
+          const v = video.value;
+          const cvs = canvas.value;
+          if (v && v.readyState === v.HAVE_ENOUGH_DATA) {
+            if (!cvs.width) {
+              cvs.width = v.videoWidth;
+              cvs.height = v.videoHeight;
+            }
+            const ctx = cvs.getContext("2d", { willReadFrequently: true });
+            ctx.drawImage(v, 0, 0, cvs.width, cvs.height);
+            const imageData = ctx.getImageData(0, 0, cvs.width, cvs.height);
+
+            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+              inversionAttempts: "dontInvert",
+            });
+
+            if (code && code.data) {
+              handleQR(code.data);
+            }
+          }
+          requestAnimationFrame(tick);
+        };
+
+        let lastScanTime = 0;
+        const handleQR = (rawText) => {
+          const now = Date.now();
+          if (now - lastScanTime < 1000) return;
+
+          const storeName = rawText.trim();
+          if (!storeName) return;
+
+          if (scannedStores.value.includes(storeName)) {
+            triggerFlash('warning'); // 重複は無言黄色
+          } else {
+            scannedStores.value.push(storeName);
+            triggerFlash('success');
+            if (navigator.vibrate) navigator.vibrate(100);
+          }
+          lastScanTime = now;
+        };
+
+        // GAS Web APIへの送信処理
+        const submitData = async () => {
+          if (scannedStores.value.length === 0 || totalQuantity.value === 0) return;
+
+          const payload = {
+            datetime: new Date().toISOString(),
+            cart: { ...cart.value },
+            stores: [...scannedStores.value]
+          };
+
+          const historyArr = [];
+          for (const p in payload.cart) {
+            historyArr.push(`${p}円x${payload.cart[p]}`);
+          }
+          lastEntryStr.value = historyArr.join(', ');
+          lastEntryStoresCount.value = payload.stores.length;
+
+          isSubmitting.value = true; // ローディング表示ON
+
+          try {
+            // text/plain にして CORS のプリフライトリクエスト(OPTIONS) を回避
+            const res = await fetch(GAS_API_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+
+            if (data.success) {
+              // 送信成功: UIリセット
+              cart.value = {};
+              activePrice.value = null;
+              changeMode('input');
+            } else {
+              throw new Error(data.error);
+            }
+          } catch (err) {
+            console.error("送信エラー:", err);
+            alert("データの送信に失敗しました。\nURL設定や通信状況をご確認ください。\n" + err);
+          } finally {
+            isSubmitting.value = false; // ローディング解除
+          }
+        };
+
+        // GAS Web APIからのデータ取得処理
+        const fetchDashboard = async () => {
+          try {
+            const res = await fetch(GAS_API_URL);
+            const data = await res.json();
+            if (data.success) {
+              dashboardTodayTotal.value = data.data.todayTotal || 0;
+              renderChart(data.data.monthlyDailyData || []);
+            }
+          } catch (err) {
+            console.error("ダッシュボード取得エラー", err);
+          }
+        };
+
+        const renderChart = (dailyData) => {
+          if (!chartCanvas.value) return;
+
+          const labels = dailyData.map(d => {
+            const parts = d.date.split('-');
+            return parts[2] ? parts[2] + '日' : d.date;
+          });
+          const data = dailyData.map(d => d.count);
+
+          if (chartInstance.value) chartInstance.value.destroy();
+
+          const ctx = chartCanvas.value.getContext('2d');
+          chartInstance.value = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: labels,
+              datasets: [{
+                label: '出荷総数',
+                data: data,
+                backgroundColor: '#1E3A8A',
+                borderRadius: 6,
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: {
+                y: { beginAtZero: true, ticks: { precision: 0, font: { weight: 'bold' } } },
+                x: { ticks: { font: { weight: 'bold' } } }
+              }
+            }
+          });
+        };
+
+        return {
+          mode, changeMode,
+          // Input
+          presetPrices, cart, activePrice, totalQuantity, activeQuantity, isInputValid, selectPrice, increment, decrement,
+          // Scan
+          startScanMode, video, canvas, scannedStores, flashClass, submitData, isSubmitting,
+          // Dashboard
+          lastEntryStr, lastEntryStoresCount, dashboardTodayTotal, chartCanvas, fetchDashboard
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+
+</html>

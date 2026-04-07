@@ -112,6 +112,12 @@
       <div class="text-[#1E3A8A] text-2xl font-black tracking-widest">送信中...</div>
     </div>
 
+    <!-- 全面ローディング表示（初期マスタ読み込み中） -->
+    <div v-show="isAppLoading" class="absolute inset-0 bg-white/95 z-[1000] flex flex-col items-center justify-center">
+      <div class="w-20 h-20 border-[8px] border-gray-200 border-t-[#000000] rounded-full animate-spin mb-6"></div>
+      <div class="text-[#000000] text-xl font-black tracking-widest">マスタデータ読込中...</div>
+    </div>
+
     <!-- HEADER -->
     <header
       class="bg-[#000000] text-white p-4 flex justify-between items-center z-10 shrink-0 border-b-4 border-[#1E3A8A]">
@@ -127,7 +133,7 @@
     <!-- NOTIFICATION ON TOP -->
     <div v-if="lastEntryStr"
       class="bg-[#1E3A8A] text-white font-bold p-3 text-center shrink-0 flex items-center justify-center gap-2 text-sm overflow-x-auto whitespace-nowrap shadow-md">
-      <span>✅</span> 前回送信: {{ lastEntryStr }} （{{ lastEntryStoresCount }}店舗）
+      <span>✅</span> 前回送信完了: {{ lastEntryStr }}
     </div>
 
     <!-- MAIN CONTENT AREA -->
@@ -242,9 +248,9 @@
 
           <div
             class="flex-1 overflow-y-auto bg-white border-[4px] border-[#000000] rounded-xl p-3 flex flex-wrap gap-2 content-start shadow-inner">
-            <span v-for="(store, index) in scannedStores" :key="index"
+            <span v-for="(storeId, index) in scannedStores" :key="index"
               class="bg-[#1E3A8A] text-white px-4 py-2 rounded-xl font-black text-sm shadow animate-popIn border-2 border-[#000000]">
-              {{ store }}
+              {{ getStoreName(storeId) }}
             </span>
             <div v-if="scannedStores.length === 0" class="text-gray-500 text-xl font-black w-full text-center mt-8">
               QRを真ん中に合わせてください

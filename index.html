@@ -252,10 +252,10 @@
           </div>
 
           <!-- Done Button -->
-          <button @click="submitData" :disabled="scannedStores.length === 0 || isSubmitting"
+          <button @click="submitData" :disabled="scannedStores.length === 0 || isSubmitting" 
             class="w-full mt-4 py-6 rounded-2xl text-2xl font-black text-white flex justify-center items-center gap-2 transition-transform transform active:scale-95 border-4 border-[#000000] shadow-lg"
-            :class="scannedStores.length > 0 ? 'bg-[#1E3A8A] active:bg-[#152e6f]' : 'bg-gray-400 opacity-50'">
-            送信して入力に戻る！ 🚀
+            :class="scannedStores.length > 0 && !isSubmitting ? 'bg-[#1E3A8A] active:bg-[#152e6f]' : 'bg-gray-400 opacity-50'">
+            {{ isSubmitting ? '送信中...' : '送信して入力に戻る！ 🚀' }}
           </button>
         </div>
       </div>
@@ -479,10 +479,9 @@
           isSubmitting.value = true; // ローディング表示ON
 
           try {
-            // text/plain にして CORS のプリフライトリクエスト(OPTIONS) を回避
+            // Headersを完全削除し、ブラウザによるCORS回避型のリクエスト（Simple Request）へと誘導します
             const res = await fetch(GAS_API_URL, {
               method: 'POST',
-              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
               body: JSON.stringify(payload)
             });
             const data = await res.json();

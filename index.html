@@ -258,7 +258,7 @@
           </div>
 
           <!-- Done Button -->
-          <button @click="submitData" :disabled="scannedStores.length === 0 || isSubmitting" 
+          <button @click="submitData" :disabled="scannedStores.length === 0 || isSubmitting"
             class="w-full mt-4 py-6 rounded-2xl text-2xl font-black text-white flex justify-center items-center gap-2 transition-transform transform active:scale-95 border-4 border-[#000000] shadow-lg"
             :class="scannedStores.length > 0 && !isSubmitting ? 'bg-[#1E3A8A] active:bg-[#152e6f]' : 'bg-gray-400 opacity-50'">
             {{ isSubmitting ? '送信中...' : '送信して入力に戻る！ 🚀' }}
@@ -294,34 +294,57 @@
     // デプロイしたGASの「ウェブアプリのURL」をここに貼り付けてください
     const GAS_API_URL = "https://script.google.com/macros/s/AKfycbxWhQCo1_LYNt1zbO8s2uvo6czVzFr-YN7hehYVtwjdbsFcoqALViYQWrdEpMRpATLO/exec";
 
-    const { createApp, ref, computed } = Vue;
+    const { createApp, ref, computed, onMounted } = Vue;
 
     createApp({
       setup() {
-        const mode = ref('input');
+        const isAppLoading = ref(true);
+        const presetPrices = ref([]);
+        const storeMap = ref({});
 
-        // カート状態
-        const presetPrices = [100, 150, 200, 250, 300, 500];
+        const mode = ref('input');
         const cart = ref({});
         const activePrice = ref(null);
 
-        // スキャン状態
         const video = ref(null);
         const canvas = ref(null);
         const scannedStores = ref([]);
         const flashClass = ref('');
 
-        // バックエンド通信状態
         const isSubmitting = ref(false);
 
-        // 履歴・ダッシュボード
         const lastEntryStr = ref('');
         const lastEntryStoresCount = ref(0);
         const dashboardTodayTotal = ref(0);
         const chartInstance = ref(null);
         const chartCanvas = ref(null);
 
-        // --- 算出プロパティ ---
+        const initApp = async () => {
+          try {
+            const res = await fetch(GAS_API_URL);
+            const data = await res.json();
+            if (data.success) {
+              presetPrices.value = data.data.prices;
+              data.data.stores.forEach(s => {
+                storeMap.value[s.id] = s.name;
+              });
+            }
+          } catch (err) {
+            console.error("初期設定の読み込みエラー:", err);
+            presetPrices.value = [100, 150, 200, 250, 300, 500];
+          } finally {
+            isAppLoading.value = false;
+          }
+        };
+
+        onMounted(() => {
+          initApp();
+        });
+
+        const getStoreName = (id) => {
+          return storeMap.value[id] || id;
+        };
+
         const totalQuantity = computed(() => {
           let sum = 0;
           for (const key in cart.value) {
@@ -337,7 +360,6 @@
           return cart.value[activePrice.value] || 0;
         });
 
-        // --- カメラ系統 ---
         let stream = null;
         let keepScanning = false;
 
@@ -387,7 +409,7 @@
         };
 
         const startCamera = async () => {
-          stopCamera(); // 既存ストリームをクリーンアップ
+          stopCamera();
 
           try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" } }, audio: false }); }
           catch (err1) {
@@ -452,20 +474,19 @@
           const now = Date.now();
           if (now - lastScanTime < 1000) return;
 
-          const storeName = rawText.trim();
-          if (!storeName) return;
+          const storeId = rawText.replace(/\s+/g, '').trim();
+          if (!storeId) return;
 
-          if (scannedStores.value.includes(storeName)) {
-            triggerFlash('warning'); // 重複は無言黄色
+          if (scannedStores.value.includes(storeId)) {
+            triggerFlash('warning');
           } else {
-            scannedStores.value.push(storeName);
+            scannedStores.value.push(storeId);
             triggerFlash('success');
             if (navigator.vibrate) navigator.vibrate(100);
           }
           lastScanTime = now;
         };
 
-        // GAS Web APIへの送信処理
         const submitData = async () => {
           if (scannedStores.value.length === 0 || totalQuantity.value === 0) return;
 
@@ -479,13 +500,13 @@
           for (const p in payload.cart) {
             historyArr.push(`${p}円x${payload.cart[p]}`);
           }
-          lastEntryStr.value = historyArr.join(', ');
+          const storeNamesStr = payload.stores.map(id => getStoreName(id)).join(', ');
+          lastEntryStr.value = `${historyArr.join(', ')} (${storeNamesStr})`;
           lastEntryStoresCount.value = payload.stores.length;
 
-          isSubmitting.value = true; // ローディング表示ON
+          isSubmitting.value = true;
 
           try {
-            // Headersを完全削除し、ブラウザによるCORS回避型のリクエスト（Simple Request）へと誘導します
             const res = await fetch(GAS_API_URL, {
               method: 'POST',
               body: JSON.stringify(payload)
@@ -493,7 +514,6 @@
             const data = await res.json();
 
             if (data.success) {
-              // 送信成功: UIリセット
               cart.value = {};
               activePrice.value = null;
               changeMode('input');
@@ -504,14 +524,13 @@
             console.error("送信エラー:", err);
             alert("データの送信に失敗しました。\nURL設定や通信状況をご確認ください。\n" + err);
           } finally {
-            isSubmitting.value = false; // ローディング解除
+            isSubmitting.value = false;
           }
         };
 
-        // GAS Web APIからのデータ取得処理
         const fetchDashboard = async () => {
           try {
-            const res = await fetch(GAS_API_URL);
+            const res = await fetch(`${GAS_API_URL}?action=dashboard`);
             const data = await res.json();
             if (data.success) {
               dashboardTodayTotal.value = data.data.todayTotal || 0;
@@ -559,11 +578,9 @@
 
         return {
           mode, changeMode,
-          // Input
-          presetPrices, cart, activePrice, totalQuantity, activeQuantity, isInputValid, selectPrice, increment, decrement,
-          // Scan
+          isAppLoading, presetPrices, getStoreName,
+          cart, activePrice, totalQuantity, activeQuantity, isInputValid, selectPrice, increment, decrement,
           startScanMode, video, canvas, scannedStores, flashClass, submitData, isSubmitting,
-          // Dashboard
           lastEntryStr, lastEntryStoresCount, dashboardTodayTotal, chartCanvas, fetchDashboard
         };
       }
